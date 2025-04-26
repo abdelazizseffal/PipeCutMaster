@@ -48,6 +48,14 @@ export function Header() {
             >
               Pricing
             </div>
+            {user?.role === "admin" && (
+              <div 
+                className="text-sm font-medium transition-colors hover:text-primary cursor-pointer text-purple-500" 
+                onClick={handleNavigation("/admin")}
+              >
+                Admin Panel
+              </div>
+            )}
           </nav>
         </div>
         <div className="flex items-center gap-4">
@@ -78,6 +86,14 @@ export function Header() {
                     <span>Subscription</span>
                   </div>
                 </DropdownMenuItem>
+                {user?.role === "admin" && (
+                  <DropdownMenuItem onClick={handleNavigation("/admin")}>
+                    <div className="flex items-center gap-2 w-full text-purple-500">
+                      <UserCog className="h-4 w-4" />
+                      <span>Admin Dashboard</span>
+                    </div>
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={() => logoutMutation.mutate()}

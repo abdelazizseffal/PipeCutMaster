@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { PipeCuttingOptimizer } from "./optimization";
-import { optimizationRequestSchema, users } from "@shared/schema";
+import { optimizationRequestSchema, users, User } from "@shared/schema";
 import { ZodError } from "zod";
 import Stripe from "stripe";
 import { setupAuth } from "./auth";
@@ -25,6 +25,13 @@ function isAuthenticated(req: Request, res: Response, next: NextFunction): void 
     return next();
   }
   res.status(401).json({ message: "Unauthorized" });
+}
+
+function isAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (req.isAuthenticated() && req.user?.role === "admin") {
+    return next();
+  }
+  res.status(403).json({ message: "Forbidden: Admin access required" });
 }
 
 // Middleware to check if user has an active subscription
@@ -322,6 +329,160 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Apply subscription check to optimization endpoint
   app.post("/api/premium-optimize", isAuthenticated, hasActiveSubscription, async (req, res) => {
     // Premium optimization features
+  });
+
+  // Admin routes
+  // Get all users
+  app.get("/api/admin/users", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      // This would typically be a function in storage.ts, but for simplicity, we're querying directly
+      const allUsers = await db.select().from(users);
+      res.json(allUsers);
+    } catch (error) {
+      console.error("Error retrieving users:", error);
+      res.status(500).json({ message: "Failed to retrieve users" });
+    }
+  });
+
+  // Get all jobs (for admin)
+  app.get("/api/admin/jobs", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const allJobs = await storage.getAllJobs();
+      res.json(allJobs);
+    } catch (error) {
+      console.error("Error retrieving jobs:", error);
+      res.status(500).json({ message: "Failed to retrieve jobs" });
+    }
+  });
+
+  // Get job result (for admin)
+  app.get("/api/admin/jobs/:id/result", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const jobId = parseInt(req.params.id);
+      if (isNaN(jobId)) {
+        return res.status(400).json({ message: "Invalid job ID" });
+      }
+      
+      const job = await storage.getJob(jobId);
+      if (!job) {
+        return res.status(404).json({ message: "Job not found" });
+      }
+      
+      const stockPipe = await storage.getStockPipe(job.stockPipeId);
+      if (!stockPipe) {
+        return res.status(404).json({ message: "Stock pipe not found" });
+      }
+      
+      const patterns = await storage.getCuttingPatternsByJobId(jobId);
+      const patternsWithSegments = await Promise.all(
+        patterns.map(async (pattern) => {
+          const segments = await storage.getCuttingSegmentsByPatternId(pattern.id);
+          return { pattern, segments };
+        })
+      );
+      
+      // Calculate metrics
+      const optimizationPatterns = patterns.map((pattern, index) => {
+        const segments = patternsWithSegments[index].segments.map(s => ({
+          length: s.length,
+          position: s.position,
+          isWaste: Boolean(s.isWaste)
+        }));
+        
+        return {
+          stockPipeIndex: pattern.stockPipeIndex,
+          efficiency: pattern.efficiency,
+          waste: pattern.waste,
+          segments
+        };
+      });
+      
+      const metrics = PipeCuttingOptimizer.calculateMetrics(stockPipe, optimizationPatterns);
+      
+      res.json({
+        job,
+        stockPipe,
+        patterns: patternsWithSegments,
+        metrics
+      });
+    } catch (error) {
+      console.error("Error retrieving job:", error);
+      res.status(500).json({ message: "Failed to retrieve job data" });
+    }
+  });
+
+  // Update user (admin only)
+  app.patch("/api/admin/users/:id", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: "Invalid user ID" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Validate allowed fields
+      const allowedFields = ['role', 'subscriptionStatus', 'fullName', 'email'];
+      const updates: Partial<User> = {};
+      
+      for (const field of allowedFields) {
+        if (req.body[field] !== undefined) {
+          updates[field as keyof User] = req.body[field];
+        }
+      }
+
+      // Update user in database
+      const updatedUser = await db.update(users)
+        .set(updates)
+        .where(eq(users.id, userId))
+        .returning()
+        .then(rows => rows[0]);
+
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("Error updating user:", error);
+      res.status(500).json({ message: "Failed to update user" });
+    }
+  });
+
+  // Delete user (admin only)
+  app.delete("/api/admin/users/:id", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      if (isNaN(userId)) {
+        return res.status(400).json({ message: "Invalid user ID" });
+      }
+
+      // Check if user exists
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Don't allow deleting the last admin
+      if (user.role === 'admin') {
+        const admins = await db.select()
+          .from(users)
+          .where(eq(users.role, 'admin'));
+          
+        if (admins.length <= 1) {
+          return res.status(403).json({ 
+            message: "Cannot delete the last admin user" 
+          });
+        }
+      }
+
+      // Delete user
+      await db.delete(users).where(eq(users.id, userId));
+
+      res.json({ success: true, message: "User deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting user:", error);
+      res.status(500).json({ message: "Failed to delete user" });
+    }
   });
 
   // Stripe webhook for handling events

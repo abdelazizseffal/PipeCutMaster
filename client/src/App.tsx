@@ -11,12 +11,18 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import AuthPage from "@/pages/auth-page";
 import SubscriptionPage from "@/pages/subscription-page";
+import AdminIndexPage from "@/pages/admin";
+import AdminUsersPage from "@/pages/admin/users";
+import AdminJobsPage from "@/pages/admin/jobs";
 
 function Router() {
   return (
     <Switch>
       <ProtectedRoute path="/" component={Home} />
       <ProtectedRoute path="/subscriptions" component={SubscriptionPage} />
+      <ProtectedRoute path="/admin" component={AdminIndexPage} />
+      <ProtectedRoute path="/admin/users" component={AdminUsersPage} />
+      <ProtectedRoute path="/admin/jobs" component={AdminJobsPage} />
       <Route path="/auth" component={AuthPage} />
       <Route component={NotFound} />
     </Switch>
