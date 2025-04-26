@@ -8,7 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { UserCircle2, ChevronDown, Scissors, LogOut, Settings, CreditCard } from "lucide-react";
+import { UserCircle2, ChevronDown, Scissors, LogOut, Settings, CreditCard, UserCog } from "lucide-react";
 
 export function Header() {
   const { user, logoutMutation } = useAuth();

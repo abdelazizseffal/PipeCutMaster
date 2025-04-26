@@ -55,6 +55,12 @@ export function AdminLayout({ children }: AdminLayoutProps) {
                 Jobs
               </div>
               <div 
+                onClick={() => navigate("/admin/activity")} 
+                className="flex cursor-pointer items-center rounded-md px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+              >
+                Activity
+              </div>
+              <div 
                 onClick={() => navigate("/admin/subscriptions")} 
                 className="flex cursor-pointer items-center rounded-md px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
               >
