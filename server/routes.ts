@@ -1,11 +1,13 @@
-import type { Express, Request } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { PipeCuttingOptimizer } from "./optimization";
-import { optimizationRequestSchema } from "@shared/schema";
+import { optimizationRequestSchema, users } from "@shared/schema";
 import { ZodError } from "zod";
 import Stripe from "stripe";
 import { setupAuth } from "./auth";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 
 // Check for Stripe secret key
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -14,11 +16,11 @@ if (!process.env.STRIPE_SECRET_KEY) {
 
 // Initialize Stripe if key is available
 const stripe = process.env.STRIPE_SECRET_KEY ? 
-  new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" }) : 
+  new Stripe(process.env.STRIPE_SECRET_KEY) : 
   null;
 
 // Middleware to ensure user is authenticated
-function isAuthenticated(req: Request, res: Response, next: Function) {
+function isAuthenticated(req: Request, res: Response, next: NextFunction): void {
   if (req.isAuthenticated()) {
     return next();
   }
@@ -26,7 +28,7 @@ function isAuthenticated(req: Request, res: Response, next: Function) {
 }
 
 // Middleware to check if user has an active subscription
-async function hasActiveSubscription(req: Request, res: Response, next: Function) {
+async function hasActiveSubscription(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!req.isAuthenticated()) {
     return res.status(401).json({ message: "Unauthorized" });
   }
@@ -52,6 +54,112 @@ async function hasActiveSubscription(req: Request, res: Response, next: Function
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication routes
   setupAuth(app);
+
+  // Get subscription plans
+  app.get("/api/subscription-plans", async (req, res) => {
+    try {
+      const plans = await storage.getAllSubscriptionPlans();
+      res.json(plans);
+    } catch (error) {
+      console.error("Error retrieving subscription plans:", error);
+      res.status(500).json({ message: "Failed to retrieve subscription plans" });
+    }
+  });
+
+  // Create a new subscription
+  app.post("/api/create-subscription", isAuthenticated, async (req, res) => {
+    if (!stripe) {
+      return res.status(500).json({ message: "Stripe is not configured" });
+    }
+
+    try {
+      const { planId } = req.body;
+      if (!planId) {
+        return res.status(400).json({ message: "Plan ID is required" });
+      }
+
+      const user = req.user;
+      const plan = await storage.getSubscriptionPlan(planId);
+      
+      if (!plan) {
+        return res.status(404).json({ message: "Subscription plan not found" });
+      }
+
+      let customerId = user.stripeCustomerId;
+
+      // Create a customer if they don't have one
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email,
+          name: user.fullName || user.username,
+          metadata: {
+            userId: user.id.toString()
+          }
+        });
+        
+        customerId = customer.id;
+        await storage.updateStripeCustomerId(user.id, customerId);
+      }
+
+      // Create the subscription
+      const subscription = await stripe.subscriptions.create({
+        customer: customerId,
+        items: [
+          {
+            price: plan.stripePriceId
+          }
+        ],
+        payment_behavior: 'default_incomplete',
+        expand: ['latest_invoice.payment_intent']
+      });
+
+      // Update user with subscription info
+      await storage.updateUserStripeInfo(user.id, {
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscription.id
+      });
+
+      // Return client secret for frontend to complete payment
+      const invoice = subscription.latest_invoice;
+      const paymentIntent = invoice?.payment_intent;
+      
+      res.json({
+        subscriptionId: subscription.id,
+        clientSecret: paymentIntent?.client_secret
+      });
+    } catch (error) {
+      console.error("Error creating subscription:", error);
+      res.status(500).json({ message: "Failed to create subscription" });
+    }
+  });
+
+  // Create a one-time payment
+  app.post("/api/create-payment-intent", isAuthenticated, async (req, res) => {
+    if (!stripe) {
+      return res.status(500).json({ message: "Stripe is not configured" });
+    }
+
+    try {
+      const { amount } = req.body;
+      
+      if (!amount || typeof amount !== 'number') {
+        return res.status(400).json({ message: "Valid amount is required" });
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(amount * 100), // Convert to cents
+        currency: "usd",
+        metadata: {
+          userId: req.user.id.toString()
+        }
+      });
+
+      res.json({ clientSecret: paymentIntent.client_secret });
+    } catch (error) {
+      console.error("Error creating payment intent:", error);
+      res.status(500).json({ message: "Failed to create payment intent" });
+    }
+  });
   // Create an optimization result
   app.post("/api/optimize", async (req, res) => {
     try {
@@ -199,6 +307,93 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to retrieve jobs" });
     }
   });
+
+  // Get jobs for the current user
+  app.get("/api/my/jobs", isAuthenticated, async (req, res) => {
+    try {
+      const jobs = await storage.getJobsByUserId(req.user.id);
+      res.json(jobs);
+    } catch (error) {
+      console.error("Error retrieving user jobs:", error);
+      res.status(500).json({ message: "Failed to retrieve user jobs" });
+    }
+  });
+
+  // Apply subscription check to optimization endpoint
+  app.post("/api/premium-optimize", isAuthenticated, hasActiveSubscription, async (req, res) => {
+    // Premium optimization features
+  });
+
+  // Stripe webhook for handling events
+  app.post("/api/webhook", async (req, res) => {
+    if (!stripe) {
+      return res.status(500).json({ message: "Stripe is not configured" });
+    }
+
+    const sig = req.headers['stripe-signature'];
+    
+    if (!sig || !process.env.STRIPE_WEBHOOK_SECRET) {
+      return res.status(400).json({ message: "Missing signature or webhook secret" });
+    }
+    
+    try {
+      const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+      
+      // Handle the event
+      switch (event.type) {
+        case 'invoice.payment_succeeded':
+          const invoice = event.data.object;
+          // Update subscription status to active
+          if (invoice.subscription) {
+            const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
+            
+            // Find the user by customer ID
+            const user = await findUserByStripeCustomerId(subscription.customer);
+            
+            if (user) {
+              await storage.updateUserStripeInfo(user.id, {
+                stripeCustomerId: subscription.customer,
+                stripeSubscriptionId: subscription.id
+              });
+            }
+          }
+          break;
+          
+        case 'customer.subscription.deleted':
+          const subscription = event.data.object;
+          
+          // Find the user by customer ID
+          const user = await findUserByStripeCustomerId(subscription.customer);
+          
+          if (user) {
+            // Update user subscription status
+            await db.update(users)
+              .set({ 
+                subscriptionStatus: 'inactive',
+              })
+              .where(eq(users.id, user.id));
+          }
+          break;
+          
+        default:
+          console.log(`Unhandled event type ${event.type}`);
+      }
+      
+      res.json({ received: true });
+    } catch (err) {
+      console.error(`Webhook Error: ${err.message}`);
+      res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+  });
+
+  // Helper function to find user by Stripe customer ID
+  async function findUserByStripeCustomerId(customerId: string) {
+    const [user] = await db.select()
+      .from(users)
+      .where(eq(users.stripeCustomerId, customerId));
+    
+    return user;
+  }
 
   const httpServer = createServer(app);
 
