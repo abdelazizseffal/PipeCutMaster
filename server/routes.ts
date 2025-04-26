@@ -354,6 +354,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to retrieve jobs" });
     }
   });
+  
+  // Admin - Subscription Plan Management
+  app.get("/api/admin/subscription-plans", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const plans = await storage.getAllSubscriptionPlans();
+      res.json(plans);
+    } catch (error) {
+      console.error("Error retrieving subscription plans:", error);
+      res.status(500).json({ message: "Failed to retrieve subscription plans" });
+    }
+  });
+
+  app.post("/api/admin/subscription-plans", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const { name, description, price, features, stripePriceId, active } = req.body;
+      
+      // Validate required fields
+      if (!name || !description || price === undefined || !stripePriceId) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // Create the subscription plan
+      const plan = await storage.createSubscriptionPlan({
+        name,
+        description,
+        price,
+        features: features || "[]",
+        stripePriceId,
+        active: active !== undefined ? active : true
+      });
+
+      res.status(201).json(plan);
+    } catch (error) {
+      console.error("Error creating subscription plan:", error);
+      res.status(500).json({ message: "Failed to create subscription plan" });
+    }
+  });
+
+  app.patch("/api/admin/subscription-plans/:id", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const planId = parseInt(req.params.id);
+      if (isNaN(planId)) {
+        return res.status(400).json({ message: "Invalid plan ID" });
+      }
+
+      const plan = await storage.getSubscriptionPlan(planId);
+      if (!plan) {
+        return res.status(404).json({ message: "Subscription plan not found" });
+      }
+
+      // Update the plan with new values
+      const updatedPlan = {
+        ...plan,
+        ...req.body,
+      };
+
+      // Use the storage interface to update the plan
+      const result = await storage.updateSubscriptionPlan(planId, updatedPlan);
+      res.json(result);
+    } catch (error) {
+      console.error("Error updating subscription plan:", error);
+      res.status(500).json({ message: "Failed to update subscription plan" });
+    }
+  });
+
+  app.delete("/api/admin/subscription-plans/:id", isAuthenticated, isAdmin, async (req, res) => {
+    try {
+      const planId = parseInt(req.params.id);
+      if (isNaN(planId)) {
+        return res.status(400).json({ message: "Invalid plan ID" });
+      }
+
+      // First check if the plan exists
+      const plan = await storage.getSubscriptionPlan(planId);
+      if (!plan) {
+        return res.status(404).json({ message: "Subscription plan not found" });
+      }
+
+      // Use the storage interface to delete the plan
+      await storage.deleteSubscriptionPlan(planId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting subscription plan:", error);
+      res.status(500).json({ message: "Failed to delete subscription plan" });
+    }
+  });
 
   // Get job result (for admin)
   app.get("/api/admin/jobs/:id/result", isAuthenticated, isAdmin, async (req, res) => {
