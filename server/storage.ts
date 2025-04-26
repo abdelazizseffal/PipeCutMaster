@@ -5,6 +5,7 @@ import {
   jobs,
   cuttingPatterns,
   cuttingSegments,
+  subscriptionPlans,
   type User, 
   type InsertUser,
   type StockPipe,
@@ -16,16 +17,24 @@ import {
   type CuttingPattern,
   type InsertCuttingPattern,
   type CuttingSegment,
-  type InsertCuttingSegment
+  type InsertCuttingSegment,
+  type SubscriptionPlan,
+  type InsertSubscriptionPlan
 } from "@shared/schema";
+import type { Store } from "express-session";
 
 // modify the interface with any CRUD methods
 // you might need
 export interface IStorage {
+  sessionStore: any; // Store
+
   // User methods
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateStripeCustomerId(userId: number, customerId: string): Promise<User>;
+  updateUserStripeInfo(userId: number, info: { stripeCustomerId: string, stripeSubscriptionId: string }): Promise<User>;
   
   // StockPipe methods
   getStockPipe(id: number): Promise<StockPipe | undefined>;
@@ -38,6 +47,7 @@ export interface IStorage {
   // Job methods
   getJob(id: number): Promise<Job | undefined>;
   getAllJobs(): Promise<Job[]>;
+  getJobsByUserId(userId: number): Promise<Job[]>;
   createJob(job: InsertJob): Promise<Job>;
   
   // CuttingPattern methods
@@ -48,130 +58,153 @@ export interface IStorage {
   // CuttingSegment methods
   getCuttingSegmentsByPatternId(patternId: number): Promise<CuttingSegment[]>;
   createCuttingSegment(segment: InsertCuttingSegment): Promise<CuttingSegment>;
+
+  // Subscription plan methods
+  getAllSubscriptionPlans(): Promise<SubscriptionPlan[]>;
+  getSubscriptionPlan(id: number): Promise<SubscriptionPlan | undefined>;
+  createSubscriptionPlan(plan: InsertSubscriptionPlan): Promise<SubscriptionPlan>;
 }
 
-export class MemStorage implements IStorage {
-  private users: Map<number, User>;
-  private stockPipes: Map<number, StockPipe>;
-  private cuttingRequirements: Map<number, CuttingRequirement>;
-  private jobs: Map<number, Job>;
-  private cuttingPatterns: Map<number, CuttingPattern>;
-  private cuttingSegments: Map<number, CuttingSegment>;
-  
-  currentUserId: number;
-  currentStockPipeId: number;
-  currentCuttingRequirementId: number;
-  currentJobId: number;
-  currentCuttingPatternId: number;
-  currentCuttingSegmentId: number;
+import { db } from './db';
+import { eq } from 'drizzle-orm';
+import connectPg from "connect-pg-simple";
+import { pool } from "./db";
+import session from "express-session";
+
+const PostgresSessionStore = connectPg(session);
+
+export class DatabaseStorage implements IStorage {
+  sessionStore: any; // Store
 
   constructor() {
-    this.users = new Map();
-    this.stockPipes = new Map();
-    this.cuttingRequirements = new Map();
-    this.jobs = new Map();
-    this.cuttingPatterns = new Map();
-    this.cuttingSegments = new Map();
-    
-    this.currentUserId = 1;
-    this.currentStockPipeId = 1;
-    this.currentCuttingRequirementId = 1;
-    this.currentJobId = 1;
-    this.currentCuttingPatternId = 1;
-    this.currentCuttingSegmentId = 1;
+    this.sessionStore = new PostgresSessionStore({ 
+      pool, 
+      createTableIfMissing: true 
+    });
   }
 
   // User methods
   async getUser(id: number): Promise<User | undefined> {
-    return this.users.get(id);
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const [user] = await db.select().from(users).where(eq(users.username, username));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.email, email));
+    return user;
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
-    const id = this.currentUserId++;
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
+    const [user] = await db.insert(users).values(insertUser).returning();
     return user;
+  }
+
+  async updateStripeCustomerId(userId: number, customerId: string): Promise<User> {
+    const [updated] = await db
+      .update(users)
+      .set({ stripeCustomerId: customerId })
+      .where(eq(users.id, userId))
+      .returning();
+    return updated;
+  }
+
+  async updateUserStripeInfo(userId: number, info: { stripeCustomerId: string, stripeSubscriptionId: string }): Promise<User> {
+    const [updated] = await db
+      .update(users)
+      .set({ 
+        stripeCustomerId: info.stripeCustomerId,
+        stripeSubscriptionId: info.stripeSubscriptionId,
+        subscriptionStatus: 'active'
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    return updated;
   }
   
   // StockPipe methods
   async getStockPipe(id: number): Promise<StockPipe | undefined> {
-    return this.stockPipes.get(id);
+    const [stockPipe] = await db.select().from(stockPipes).where(eq(stockPipes.id, id));
+    return stockPipe;
   }
   
   async createStockPipe(insertStockPipe: InsertStockPipe): Promise<StockPipe> {
-    const id = this.currentStockPipeId++;
-    const stockPipe: StockPipe = { ...insertStockPipe, id };
-    this.stockPipes.set(id, stockPipe);
+    const [stockPipe] = await db.insert(stockPipes).values(insertStockPipe).returning();
     return stockPipe;
   }
   
   // CuttingRequirement methods
   async getCuttingRequirementsByJobId(jobId: number): Promise<CuttingRequirement[]> {
-    return Array.from(this.cuttingRequirements.values()).filter(
-      req => req.jobId === jobId
-    );
+    return db.select().from(cuttingRequirements).where(eq(cuttingRequirements.jobId, jobId));
   }
   
   async createCuttingRequirement(insertRequirement: InsertCuttingRequirement): Promise<CuttingRequirement> {
-    const id = this.currentCuttingRequirementId++;
-    const requirement: CuttingRequirement = { ...insertRequirement, id };
-    this.cuttingRequirements.set(id, requirement);
+    const [requirement] = await db.insert(cuttingRequirements).values(insertRequirement).returning();
     return requirement;
   }
   
   // Job methods
   async getJob(id: number): Promise<Job | undefined> {
-    return this.jobs.get(id);
+    const [job] = await db.select().from(jobs).where(eq(jobs.id, id));
+    return job;
   }
   
   async getAllJobs(): Promise<Job[]> {
-    return Array.from(this.jobs.values());
+    return db.select().from(jobs);
+  }
+
+  async getJobsByUserId(userId: number): Promise<Job[]> {
+    return db.select().from(jobs).where(eq(jobs.userId, userId));
   }
   
   async createJob(insertJob: InsertJob): Promise<Job> {
-    const id = this.currentJobId++;
-    const job: Job = { ...insertJob, id };
-    this.jobs.set(id, job);
+    const [job] = await db.insert(jobs).values(insertJob).returning();
     return job;
   }
   
   // CuttingPattern methods
   async getCuttingPattern(id: number): Promise<CuttingPattern | undefined> {
-    return this.cuttingPatterns.get(id);
+    const [pattern] = await db.select().from(cuttingPatterns).where(eq(cuttingPatterns.id, id));
+    return pattern;
   }
   
   async getCuttingPatternsByJobId(jobId: number): Promise<CuttingPattern[]> {
-    return Array.from(this.cuttingPatterns.values()).filter(
-      pattern => pattern.jobId === jobId
-    );
+    return db.select().from(cuttingPatterns).where(eq(cuttingPatterns.jobId, jobId));
   }
   
   async createCuttingPattern(insertPattern: InsertCuttingPattern): Promise<CuttingPattern> {
-    const id = this.currentCuttingPatternId++;
-    const pattern: CuttingPattern = { ...insertPattern, id };
-    this.cuttingPatterns.set(id, pattern);
+    const [pattern] = await db.insert(cuttingPatterns).values(insertPattern).returning();
     return pattern;
   }
   
   // CuttingSegment methods
   async getCuttingSegmentsByPatternId(patternId: number): Promise<CuttingSegment[]> {
-    return Array.from(this.cuttingSegments.values()).filter(
-      segment => segment.patternId === patternId
-    );
+    return db.select().from(cuttingSegments).where(eq(cuttingSegments.patternId, patternId));
   }
   
   async createCuttingSegment(insertSegment: InsertCuttingSegment): Promise<CuttingSegment> {
-    const id = this.currentCuttingSegmentId++;
-    const segment: CuttingSegment = { ...insertSegment, id };
-    this.cuttingSegments.set(id, segment);
+    const [segment] = await db.insert(cuttingSegments).values(insertSegment).returning();
     return segment;
+  }
+
+  // Subscription plans methods
+  async getAllSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+    return db.select().from(subscriptionPlans).where(eq(subscriptionPlans.active, true));
+  }
+
+  async getSubscriptionPlan(id: number): Promise<SubscriptionPlan | undefined> {
+    const [plan] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, id));
+    return plan;
+  }
+
+  async createSubscriptionPlan(insertPlan: InsertSubscriptionPlan): Promise<SubscriptionPlan> {
+    const [plan] = await db.insert(subscriptionPlans).values(insertPlan).returning();
+    return plan;
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();

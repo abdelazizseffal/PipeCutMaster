@@ -1,11 +1,57 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { PipeCuttingOptimizer } from "./optimization";
 import { optimizationRequestSchema } from "@shared/schema";
 import { ZodError } from "zod";
+import Stripe from "stripe";
+import { setupAuth } from "./auth";
+
+// Check for Stripe secret key
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.warn('Warning: Missing Stripe secret key. Stripe functionality will be limited.');
+}
+
+// Initialize Stripe if key is available
+const stripe = process.env.STRIPE_SECRET_KEY ? 
+  new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2023-10-16" }) : 
+  null;
+
+// Middleware to ensure user is authenticated
+function isAuthenticated(req: Request, res: Response, next: Function) {
+  if (req.isAuthenticated()) {
+    return next();
+  }
+  res.status(401).json({ message: "Unauthorized" });
+}
+
+// Middleware to check if user has an active subscription
+async function hasActiveSubscription(req: Request, res: Response, next: Function) {
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  
+  const user = req.user;
+  
+  // Allow if user has active subscription
+  if (user.subscriptionStatus === 'active') {
+    return next();
+  }
+  
+  // Allow if user is on free tier (e.g. for trial or basic features)
+  if (user.subscriptionStatus === 'free') {
+    return next();
+  }
+  
+  return res.status(403).json({ 
+    message: "Subscription required", 
+    code: "SUBSCRIPTION_REQUIRED" 
+  });
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Setup authentication routes
+  setupAuth(app);
   // Create an optimization result
   app.post("/api/optimize", async (req, res) => {
     try {
