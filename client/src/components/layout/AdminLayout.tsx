@@ -12,7 +12,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
   const [, navigate] = useLocation();
 
   useEffect(() => {
-    if (!isLoading && user && user.role !== "admin") {
+    if (!isLoading && user && user.role !== "admin" && user.role !== "superadmin") {
       navigate("/");
     }
   }, [user, isLoading, navigate]);
@@ -25,7 +25,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
     );
   }
 
-  if (!user || user.role !== "admin") {
+  if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
     return null;
   }
 
@@ -72,6 +72,14 @@ export function AdminLayout({ children }: AdminLayoutProps) {
               >
                 Settings
               </div>
+              {user.role === "superadmin" && (
+                <div 
+                  onClick={() => navigate("/admin/super-admin")} 
+                  className="flex cursor-pointer items-center rounded-md px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100"
+                >
+                  Super Admin
+                </div>
+              )}
             </div>
           </nav>
         </aside>

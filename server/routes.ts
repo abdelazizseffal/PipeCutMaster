@@ -5,7 +5,7 @@ import { PipeCuttingOptimizer } from "./optimization";
 import { optimizationRequestSchema, users, User } from "@shared/schema";
 import { ZodError } from "zod";
 import Stripe from "stripe";
-import { setupAuth } from "./auth";
+import { setupAuth, hashPassword } from "./auth";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 
@@ -28,10 +28,18 @@ function isAuthenticated(req: Request, res: Response, next: NextFunction): void 
 }
 
 function isAdmin(req: Request, res: Response, next: NextFunction): void {
-  if (req.isAuthenticated() && req.user?.role === "admin") {
+  if (req.isAuthenticated() && (req.user?.role === "admin" || req.user?.role === "superadmin")) {
     return next();
   }
   res.status(403).json({ message: "Forbidden: Admin access required" });
+}
+
+// Super admin middleware
+function isSuperAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (req.isAuthenticated() && req.user?.role === "superadmin") {
+    return next();
+  }
+  res.status(403).json({ message: "Forbidden: Super Admin access required" });
 }
 
 // Middleware to check if user has an active subscription
@@ -329,6 +337,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Apply subscription check to optimization endpoint
   app.post("/api/premium-optimize", isAuthenticated, hasActiveSubscription, async (req, res) => {
     // Premium optimization features
+  });
+
+  // Super Admin routes
+  app.post("/api/admin/super-admin", isAuthenticated, isSuperAdmin, async (req, res) => {
+    try {
+      const { username, email, password, fullName, role } = req.body;
+      
+      // Validate required fields
+      if (!username || !email || !password || role !== "superadmin") {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // Check if user already exists
+      const existingUser = await storage.getUserByUsername(username);
+      if (existingUser) {
+        return res.status(400).json({ message: "Username already exists" });
+      }
+
+      const existingEmail = await storage.getUserByEmail(email);
+      if (existingEmail) {
+        return res.status(400).json({ message: "Email already exists" });
+      }
+
+      // Create the super admin user
+      const user = await storage.createUser({
+        username,
+        email,
+        password: await hashPassword(password),
+        fullName,
+      });
+
+      // Set the role to superadmin
+      await db.update(users)
+        .set({ role: "superadmin" })
+        .where(eq(users.id, user.id));
+
+      // Get the updated user
+      const updatedUser = await storage.getUser(user.id);
+      
+      res.status(201).json(updatedUser);
+    } catch (error) {
+      console.error("Error creating super admin:", error);
+      res.status(500).json({ message: "Failed to create super admin" });
+    }
   });
 
   // Admin routes
