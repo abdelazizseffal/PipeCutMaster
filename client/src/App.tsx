@@ -15,6 +15,8 @@ import AdminIndexPage from "@/pages/admin";
 import AdminUsersPage from "@/pages/admin/users";
 import AdminJobsPage from "@/pages/admin/jobs";
 import AdminActivityPage from "@/pages/admin/activity";
+import AdminSubscriptionPlansPage from "@/pages/admin/subscription-plans";
+import ProfilePage from "@/pages/profile";
 
 function Router() {
   return (
@@ -25,6 +27,8 @@ function Router() {
       <ProtectedRoute path="/admin/users" component={AdminUsersPage} />
       <ProtectedRoute path="/admin/jobs" component={AdminJobsPage} />
       <ProtectedRoute path="/admin/activity" component={AdminActivityPage} />
+      <ProtectedRoute path="/admin/subscription-plans" component={AdminSubscriptionPlansPage} />
+      <ProtectedRoute path="/profile" component={ProfilePage} />
       <Route path="/auth" component={AuthPage} />
       <Route component={NotFound} />
     </Switch>
