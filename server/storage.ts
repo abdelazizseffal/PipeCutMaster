@@ -63,6 +63,8 @@ export interface IStorage {
   getAllSubscriptionPlans(): Promise<SubscriptionPlan[]>;
   getSubscriptionPlan(id: number): Promise<SubscriptionPlan | undefined>;
   createSubscriptionPlan(plan: InsertSubscriptionPlan): Promise<SubscriptionPlan>;
+  updateSubscriptionPlan(id: number, updateData: Partial<SubscriptionPlan>): Promise<SubscriptionPlan>;
+  deleteSubscriptionPlan(id: number): Promise<void>;
 }
 
 import { db } from './db';
@@ -204,6 +206,18 @@ export class DatabaseStorage implements IStorage {
   async createSubscriptionPlan(insertPlan: InsertSubscriptionPlan): Promise<SubscriptionPlan> {
     const [plan] = await db.insert(subscriptionPlans).values(insertPlan).returning();
     return plan;
+  }
+  
+  async updateSubscriptionPlan(id: number, updateData: Partial<SubscriptionPlan>): Promise<SubscriptionPlan> {
+    const [plan] = await db.update(subscriptionPlans)
+      .set(updateData)
+      .where(eq(subscriptionPlans.id, id))
+      .returning();
+    return plan;
+  }
+  
+  async deleteSubscriptionPlan(id: number): Promise<void> {
+    await db.delete(subscriptionPlans).where(eq(subscriptionPlans.id, id));
   }
 }
 
